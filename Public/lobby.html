@@ -1,0 +1,183 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Build & Survive — Lobby</title>
+  <style>
+    body{font-family:system-ui,Arial;margin:16px}
+    #players {margin-top:12px}
+    .player {padding:6px;border:1px solid #ddd;margin:4px;border-radius:6px}
+    .host {font-weight:bold}
+    #grid-preview {margin-top:12px}
+  </style>
+</head>
+<body>
+  <h1>Build & Survive — Lobby (Part 1)</h1>
+  <div>
+    <label>Your name: <input id="name" placeholder="Player" /></label>
+    <button id="setName">Set</button>
+  </div>
+
+  <hr />
+
+  <div>
+    <h3>Create Room</h3>
+    <label>Max players (2-6): <input id="maxPlayers" type="number" value="6" min="2" max="6" /></label>
+    <button id="create">Create Room</button>
+  </div>
+
+  <div>
+    <h3>Join Room</h3>
+    <input id="joinCode" placeholder="Room code (e.g. ABC123)" />
+    <button id="join">Join</button>
+  </div>
+
+  <hr />
+  <div id="lobby" style="display:none">
+    <h2>Room <span id="roomId"></span></h2>
+    <div>Host: <span id="hostName"></span></div>
+    <div id="players"></div>
+    <div style="margin-top:8px">
+      <button id="toggleReady">Toggle Ready</button>
+      <button id="leave">Leave Room</button>
+      <button id="startGame">Start Game (Host only)</button>
+    </div>
+  </div>
+
+  <div id="inGame" style="display:none">
+    <h2>Game Started</h2>
+    <div>Grid size: <span id="gridSize"></span></div>
+    <div id="grid-preview"></div>
+  </div>
+
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script>
+    const socket = io();
+
+    const nameInput = document.getElementById('name');
+    const setNameBtn = document.getElementById('setName');
+    const createBtn = document.getElementById('create');
+    const joinBtn = document.getElementById('join');
+    const joinCode = document.getElementById('joinCode');
+    const maxPlayers = document.getElementById('maxPlayers');
+
+    const lobbyDiv = document.getElementById('lobby');
+    const roomIdSpan = document.getElementById('roomId');
+    const hostNameSpan = document.getElementById('hostName');
+    const playersDiv = document.getElementById('players');
+    const toggleReadyBtn = document.getElementById('toggleReady');
+    const leaveBtn = document.getElementById('leave');
+    const startGameBtn = document.getElementById('startGame');
+
+    const inGameDiv = document.getElementById('inGame');
+    const gridSizeSpan = document.getElementById('gridSize');
+    const gridPreview = document.getElementById('grid-preview');
+
+    setNameBtn.onclick = () => {
+      const name = nameInput.value.trim();
+      socket.emit('set-username', name);
+    };
+
+    socket.on('username-set', (name) => {
+      nameInput.value = name;
+    });
+
+    createBtn.onclick = () => {
+      const name = nameInput.value.trim();
+      const mp = parseInt(maxPlayers.value, 10) || 6;
+      socket.emit('create-room', { name, maxPlayers: mp }, (res) => {
+        if (res.ok) openLobby(res.room);
+        else alert('Create failed');
+      });
+    };
+
+    joinBtn.onclick = () => {
+      const code = (joinCode.value || '').trim().toUpperCase();
+      const name = nameInput.value.trim();
+      if (!code) return alert('Enter room code');
+      socket.emit('join-room', { roomId: code, name }, (res) => {
+        if (res.ok) openLobby(res.room);
+        else alert('Join failed: ' + (res.error || 'unknown'));
+      });
+    };
+
+    function openLobby(room) {
+      lobbyDiv.style.display = 'block';
+      inGameDiv.style.display = 'none';
+      roomIdSpan.textContent = room.id;
+      hostNameSpan.textContent = room.hostName;
+      renderPlayers(room.players, room.host);
+    }
+
+    function renderPlayers(players, hostId) {
+      playersDiv.innerHTML = '';
+      players.forEach(p => {
+        const el = document.createElement('div');
+        el.className = 'player' + (p.id === hostId ? ' host' : '');
+        el.textContent = p.name + (p.ready ? ' (ready)' : '');
+        playersDiv.appendChild(el);
+      });
+    }
+
+    socket.on('lobby-update', (room) => {
+      if (!room) return;
+      openLobby(room);
+    });
+
+    toggleReadyBtn.onclick = () => {
+      socket.emit('toggle-ready', (res) => {
+        if (!res.ok) alert('Failed to toggle ready');
+      });
+    };
+
+    leaveBtn.onclick = () => {
+      socket.emit('leave-room', null, (res) => {
+        if (res.ok) {
+          lobbyDiv.style.display = 'none';
+          inGameDiv.style.display = 'none';
+          playersDiv.innerHTML = '';
+        }
+      });
+    };
+
+    startGameBtn.onclick = () => {
+      socket.emit('start-game', null, (res) => {
+        if (!res.ok) alert('Failed to start: ' + (res.error || ''));
+      });
+    };
+
+    socket.on('game-start', (payload) => {
+      console.log('GAME START', payload);
+      lobbyDiv.style.display = 'none';
+      inGameDiv.style.display = 'block';
+      gridSizeSpan.textContent = payload.gridSize;
+
+      // Very lightweight grid preview (text)
+      gridPreview.innerHTML = '';
+      const rows = payload.grid;
+      const table = document.createElement('table');
+      table.style.borderCollapse = 'collapse';
+      for (let y = 0; y < rows.length; y++) {
+        const tr = document.createElement('tr');
+        for (let x = 0; x < rows[y].length; x++) {
+          const td = document.createElement('td');
+          td.style.width = '6px'; td.style.height = '6px';
+          td.style.border = '1px solid #eee';
+          td.style.background = '#f8f8f8';
+          tr.appendChild(td);
+        }
+        table.appendChild(tr);
+      }
+      gridPreview.appendChild(table);
+    });
+
+    // fetch public rooms (optional) - show in console
+    setTimeout(() => {
+      socket.emit('get-rooms', (res) => {
+        if (res.ok) console.log('Public rooms:', res.rooms);
+      });
+    }, 500);
+  </script>
+</body>
+</html>
